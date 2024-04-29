@@ -1162,8 +1162,8 @@ void beginSystemState()
         // Return to either Base or Rover Not Started. The last state previous to power down.
         systemState = settings.lastState;
 
-        if (settings.enablePointPerfectCorrections)
-            systemState = STATE_KEYS_STARTED; // Begin process for getting new keys
+        // if (settings.enablePointPerfectCorrections)
+        //     systemState = STATE_KEYS_STARTED; // Begin process for getting new keys
     }
     else
     {

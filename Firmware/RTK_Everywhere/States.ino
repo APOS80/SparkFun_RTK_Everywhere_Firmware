@@ -5,6 +5,7 @@
   https://lucid.app/lucidchart/53519501-9fa5-4352-aa40-673f88ca0c9b/edit?invitationId=inv_ebd4b988-513d-4169-93fd-c291851108f8
 */
 
+bool firstFixAchievedSincePowerOn = false; //Goes true at first 3D fix. Used to trigger PointPerfect Key check and L-Band freq.
 static uint32_t lastStateTime = 0;
 
 // Given the current state, see if conditions have moved us to a new state
@@ -145,6 +146,16 @@ void stateUpdate()
             }
             else if (gnssIsRTKFix())
                 changeState(STATE_ROVER_RTK_FIX);
+
+            // If this is the first fix, once HPA is low enough,
+            // If corrections are enabled, check key age using STATE_KEYS_STARTED
+            // If applicable, determine L-Band frequency
+            if (gnssGetHorizontalAccuracy() < 10 && firstFixAchievedSincePowerOn == false)
+            {
+                firstFixAchievedSincePowerOn = true;
+                if (settings.enablePointPerfectCorrections)
+                    systemState = STATE_KEYS_STARTED; // Begin process for getting new keys
+            }
         }
         break;
 
