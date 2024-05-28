@@ -156,6 +156,10 @@ void menuSystem()
         systemPrintf("Filtered by parser: %d NMEA / %d RTCM / %d UBX\r\n", failedParserMessages_NMEA,
                      failedParserMessages_RTCM, failedParserMessages_UBX);
 
+        //---------------------------
+        // Start of menu
+        //---------------------------
+
         systemPrintln();
         systemPrintln("Menu: System");
         // Separate the menu from the status
@@ -211,7 +215,7 @@ void menuSystem()
 
         systemPrintln("n) Debug network");
 
-        systemPrintln("o) Configure RTK operation");
+        systemPrintln("o) Configure operation");
 
         systemPrintln("p) Configure periodic print messages");
 
@@ -413,9 +417,6 @@ void menuDebugHardware()
         systemPrintf("%s\r\n", settings.enablePrintSDBuffers ? "Enabled" : "Disabled");
 
         // GNSS
-        systemPrint("8) Print messages with bad checksums or CRCs: ");
-        systemPrintf("%s\r\n", settings.enablePrintBadMessages ? "Enabled" : "Disabled");
-
         systemPrint("9) Print GNSS Debugging: ");
         systemPrintf("%s\r\n", settings.debugGnss ? "Enabled" : "Disabled");
 
@@ -429,7 +430,7 @@ void menuDebugHardware()
         systemPrintf("%s\r\n", settings.enableImuCompensationDebug ? "Enabled" : "Disabled");
 
         if (present.gnss_um980)
-            systemPrintln("13) UM980 Direct connect");
+            systemPrintln("13) UM980 direct connect");
 
         systemPrint("14) PSRAM (");
         if (ESP.getPsramSize() == 0)
@@ -480,8 +481,6 @@ void menuDebugHardware()
         }
         else if (incoming == 7)
             settings.enablePrintSDBuffers ^= 1;
-        else if (incoming == 8)
-            settings.enablePrintBadMessages ^= 1;
         else if (incoming == 9)
         {
             settings.debugGnss ^= 1;
@@ -505,23 +504,55 @@ void menuDebugHardware()
         }
         else if (incoming == 13 && present.gnss_um980)
         {
-            systemPrintln("Press ! to exit");
+            // Note: We cannot increase the bootloading speed beyond 115200 because
+            //  we would need to alter the UM980 baud, then save to NVM, then allow the UM980 to reset.
+            //  This is workable, but the next time the RTK Torch resets, it assumes communication at 115200bps
+            //  This fails and communication is broken. We could program in some logic that attempts comm at 460800
+            //  then reconfigures the UM980 to 115200bps, then resets, but autobaud detection in the UM980 library is
+            //  not yet supported.
+
+            // Stop all UART tasks
+            tasksStopGnssUart();
+
+            systemPrintln("Entering UM980 direct connect at 115200bps for firmware update and configuration. Use "
+                          "UPrecise to update "
+                          "the firmware. Power cycle RTK Torch to "
+                          "return to normal operation.");
+
+            // Make sure ESP-UART1 is connected to UM980
+            digitalWrite(pin_muxA, LOW);
+
+            // UPrecise needs to query the device before entering bootload mode
+            // Wait for UPrecise to send bootloader trigger (character T followed by character @) before resetting UM980
+            bool inBootMode = false;
 
             // Echo everything to/from UM980
             while (1)
             {
-                while (serialGNSS->available())
+                // Data coming from UM980 to external USB
+                if (serialGNSS->available())
                     systemWrite(serialGNSS->read());
 
+                // Data coming from external USB to UM980
                 if (systemAvailable())
                 {
                     byte incoming = systemRead();
-                    if (incoming == '!')
-                        break;
-                    else if (incoming == '1')
-                        serialGNSS->println("mask");
-                    else if (incoming == '2')
-                        serialGNSS->println("config");
+                    serialGNSS->write(incoming);
+
+                    // Detect bootload sequence
+                    if (inBootMode == false && incoming == 'T')
+                    {
+                        byte nextIncoming = Serial.peek();
+                        if (nextIncoming == '@')
+                        {
+                            // Reset UM980
+                            um980Reset();
+                            delay(25);
+                            um980Boot();
+
+                            inBootMode = true;
+                        }
+                    }
                 }
             }
         }
@@ -726,25 +757,24 @@ void menuDebugSoftware()
         systemPrint("31) Print duplicate states: ");
         systemPrintf("%s\r\n", settings.enablePrintDuplicateStates ? "Enabled" : "Disabled");
 
-        systemPrint("32) Reboot RTK after uptime reaches: ");
-        if (settings.rebootSeconds > 4294967)
+        systemPrint("32) Automatic device reboot in minutes: ");
+        if (settings.rebootMinutes == 0)
             systemPrintln("Disabled");
         else
         {
             int days;
             int hours;
             int minutes;
-            int seconds;
 
-            seconds = settings.rebootSeconds;
-            days = seconds / SECONDS_IN_A_DAY;
-            seconds -= days * SECONDS_IN_A_DAY;
-            hours = seconds / SECONDS_IN_AN_HOUR;
-            seconds -= hours * SECONDS_IN_AN_HOUR;
-            minutes = seconds / SECONDS_IN_A_MINUTE;
-            seconds -= minutes * SECONDS_IN_A_MINUTE;
+            const int minutesInADay = 60 * 24;
 
-            systemPrintf("%d (%d days %d:%02d:%02d)\r\n", settings.rebootSeconds, days, hours, minutes, seconds);
+            minutes = settings.rebootMinutes;
+            days = minutes / minutesInADay;
+            minutes -= days * minutesInADay;
+            hours = minutes / minutesInADay;
+            minutes -= hours * minutesInADay;
+
+            systemPrintf("%d (%d days %d:%02d)\r\n", settings.rebootMinutes, days, hours, minutes);
         }
 
         systemPrintf("33) Print boot times: %s\r\n", settings.printBootTimes ? "Enabled" : "Disabled");
@@ -794,13 +824,13 @@ void menuDebugSoftware()
             settings.enablePrintDuplicateStates ^= 1;
         else if (incoming == 32)
         {
-            systemPrint("Enter uptime seconds before reboot, Disabled = 0, Reboot range (30 - 4294967): ");
-            int rebootSeconds = getUserInputNumber(); // Returns EXIT, TIMEOUT, or long
-            if ((rebootSeconds != INPUT_RESPONSE_GETNUMBER_EXIT) && (rebootSeconds != INPUT_RESPONSE_GETNUMBER_TIMEOUT))
+            systemPrint("Enter uptime minutes before reboot, Disabled = 0, Reboot range (1 - 4294967): ");
+            int rebootMinutes = getUserInputNumber(); // Returns EXIT, TIMEOUT, or long
+            if ((rebootMinutes != INPUT_RESPONSE_GETNUMBER_EXIT) && (rebootMinutes != INPUT_RESPONSE_GETNUMBER_TIMEOUT))
             {
-                if (rebootSeconds < 30 || rebootSeconds > 4294967) // Disable the reboot
+                if (rebootMinutes < 1 || rebootMinutes > 4294967) // Disable the reboot
                 {
-                    settings.rebootSeconds = (uint32_t)-1;
+                    settings.rebootMinutes = 0;
                     systemPrintln("Reset is disabled");
                 }
                 else
@@ -808,20 +838,19 @@ void menuDebugSoftware()
                     int days;
                     int hours;
                     int minutes;
-                    int seconds;
+
+                    const int minutesInADay = 60 * 24;
 
                     // Set the reboot time
-                    settings.rebootSeconds = rebootSeconds;
+                    settings.rebootMinutes = rebootMinutes;
 
-                    seconds = settings.rebootSeconds;
-                    days = seconds / SECONDS_IN_A_DAY;
-                    seconds -= days * SECONDS_IN_A_DAY;
-                    hours = seconds / SECONDS_IN_AN_HOUR;
-                    seconds -= hours * SECONDS_IN_AN_HOUR;
-                    minutes = seconds / SECONDS_IN_A_MINUTE;
-                    seconds -= minutes * SECONDS_IN_A_MINUTE;
+                    minutes = settings.rebootMinutes;
+                    days = minutes / minutesInADay;
+                    minutes -= days * minutesInADay;
+                    hours = minutes / minutesInADay;
+                    minutes -= hours * minutesInADay;
 
-                    systemPrintf("Reboot after uptime reaches %d days %d:%02d:%02d\r\n", days, hours, minutes, seconds);
+                    systemPrintf("Reboot after uptime reaches %d days %d:%02d\r\n", days, hours, minutes);
                 }
             }
         }
@@ -914,7 +943,15 @@ void menuOperation()
         systemPrintln(settings.uartReceiveBufferSize);
 
         // ZED
-        systemPrintln("10) Mirror ZED-F9x's UART1 settings to USB");
+        if (present.gnss_zedf9p)
+            systemPrintln("10) Mirror ZED-F9x's UART1 settings to USB");
+
+        // PPL Float Lock timeout
+        systemPrint("11) Set PPL RTK Fix Timeout (seconds): ");
+        if (settings.pplFixTimeoutS > 0)
+            systemPrintln(settings.pplFixTimeoutS);
+        else
+            systemPrintln("Disabled - no resets");
 
         systemPrintln("----  Interrupts  ----");
         systemPrint("30) Bluetooth Interrupts Core: ");
@@ -1007,7 +1044,7 @@ void menuOperation()
                 ESP.restart();
             }
         }
-        else if (incoming == 10)
+        else if (incoming == 10 && present.gnss_zedf9p)
         {
             bool response = gnssSetMessagesUsb(MAX_SET_MESSAGES_RETRIES);
 
@@ -1015,6 +1052,11 @@ void menuOperation()
                 systemPrintln(F("Failed to enable USB messages"));
             else
                 systemPrintln(F("USB messages successfully enabled"));
+        }
+        else if (incoming == 11)
+        {
+            getNewSetting("Enter number of seconds in RTK float using PPL, before reset", 0, 3600,
+                          &settings.pplFixTimeoutS); // Arbitrary 60 minute limit
         }
 
         else if (incoming == 30)

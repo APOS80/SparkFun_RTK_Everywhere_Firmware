@@ -196,7 +196,7 @@ void displayUpdate()
             oled->erase();
 
             std::vector<iconPropertyBlinking> iconPropertyList; // List of icons to be displayed
-            iconPropertyList.clear(); // Redundant?
+            iconPropertyList.clear();                           // Redundant?
 
             switch (systemState)
             {
@@ -959,8 +959,9 @@ void setESPNowIcon_TwoRadios(std::vector<iconPropertyBlinking> *iconList)
                 prop.icon = ESPNowSymbol2Left64x48;
             else if (espnowRSSI >= -80)
                 prop.icon = ESPNowSymbol1Left64x48;
-            else //if (espnowRSSI > -255)
-                prop.icon = ESPNowSymbol0Left64x48; // Always show the synbol because we've got incoming or outgoing data
+            else // if (espnowRSSI > -255)
+                prop.icon =
+                    ESPNowSymbol0Left64x48; // Always show the synbol because we've got incoming or outgoing data
             iconList->push_back(prop);
 
             // Share the spot. Determine if we need to indicate Up, or Down
@@ -1314,7 +1315,7 @@ void paintClock(std::vector<iconPropertyBlinking> *iconList, bool blinking)
 {
     // Animate icon to show system running. The 2* makes the blink correct
     static uint8_t clockIconDisplayed = (2 * CLOCK_ICON_STATES) - 1;
-    clockIconDisplayed++; // Goto next icon
+    clockIconDisplayed++;                          // Goto next icon
     clockIconDisplayed %= (2 * CLOCK_ICON_STATES); // Wrap
 
     iconPropertyBlinking prop;
@@ -2060,6 +2061,10 @@ void displayWiFiConfig()
         else if (WiFi.getMode() == WIFI_AP)
             snprintf(mySSID, sizeof(mySSID), "%s", "RTK Config");
 
+        // If we are in AP+STA mode, still display RTK Config
+        else if (WiFi.getMode() == WIFI_AP_STA)
+            snprintf(mySSID, sizeof(mySSID), "%s", "RTK Config");
+
         else
             snprintf(mySSID, sizeof(mySSID), "%s", "Error");
     }
@@ -2093,7 +2098,7 @@ void displayWiFiConfig()
 
 #ifdef COMPILE_AP
     IPAddress myIpAddress;
-    if (WiFi.getMode() == WIFI_AP)
+    if ((WiFi.getMode() == WIFI_AP) || (WiFi.getMode() == WIFI_AP_STA))
         myIpAddress = WiFi.softAPIP();
     else
         myIpAddress = WiFi.localIP();
@@ -2270,10 +2275,12 @@ void paintProfile(uint8_t profileUnit)
 
         if (profileNumber >= 0)
         {
-            settings.updateGNSSSettings = true; // When this profile is loaded next, force system to update GNSS settings.
+            settings.updateGNSSSettings =
+                true;               // When this profile is loaded next, force system to update GNSS settings.
             recordSystemSettings(); // Before switching, we need to record the current settings to LittleFS and SD
 
-            recordProfileNumber((uint8_t)profileNumber); // Update internal settings with user's choice, mark unit for config update
+            recordProfileNumber(
+                (uint8_t)profileNumber); // Update internal settings with user's choice, mark unit for config update
 
             log_d("Going to profile number %d from unit %d, name '%s'", profileNumber, profileUnit, profileName);
 
@@ -2468,7 +2475,8 @@ void paintDisplaySetup()
 
     for (auto it = setupButtons.begin(); it != setupButtons.end(); it = std::next(it))
     {
-        if (thisIsButton >= setupSelectedButton) // Should we display this button based on the global setupSelectedButton?
+        if (thisIsButton >=
+            setupSelectedButton) // Should we display this button based on the global setupSelectedButton?
         {
             if (printedButtons < maxButtons) // Do we have room to display it?
             {
@@ -2476,7 +2484,8 @@ void paintDisplaySetup()
                 {
                     int nameWidth = ((present.display_type == DISPLAY_128x64) ? 17 : 9);
                     char miniProfileName[nameWidth] = {0};
-                    snprintf(miniProfileName, sizeof(miniProfileName), "%d_%s", it->newProfile, it->name); // Prefix with index #
+                    snprintf(miniProfileName, sizeof(miniProfileName), "%d_%s", it->newProfile,
+                             it->name); // Prefix with index #
                     printTextCenter(miniProfileName, 12 * printedButtons, QW_FONT_8X16, 1, printedButtons == 0);
                 }
                 else
@@ -2546,7 +2555,8 @@ void printTextCenter(const char *text, uint8_t yPos, QwiicFont &fontType, uint8_
 }
 
 // Given text, and location, print text to the screen
-void printTextAt(const char *text, uint8_t xPos, uint8_t yPos, QwiicFont &fontType, uint8_t kerning) // text, x, y, font type, kearning, inverted
+void printTextAt(const char *text, uint8_t xPos, uint8_t yPos, QwiicFont &fontType,
+                 uint8_t kerning) // text, x, y, font type, kearning, inverted
 {
     oled->setFont(fontType);
     oled->setDrawMode(grROPXOR);

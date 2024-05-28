@@ -1,4 +1,4 @@
-// Connect to ZED module and identify particulars
+// Connect to GNSS and identify particulars
 void gnssBegin()
 {
     if (present.gnss_zedf9p)
@@ -431,31 +431,19 @@ void gnssSetMinCno(uint8_t cnoValue)
         if (present.gnss_zedf9p)
         {
             zedSetMinCno(cnoValue);
-
-            // Update the setting
-            settings.minCNO_F9P = cnoValue;
+            settings.minCNO = cnoValue; // Update the setting
         }
         else if (present.gnss_um980)
         {
             um980SetMinCNO(cnoValue);
-            settings.minCNO_um980 = cnoValue; // Update the setting
+            settings.minCNO = cnoValue; // Update the setting
         }
     }
 }
 
 uint8_t gnssGetMinCno()
 {
-    if (present.gnss_zedf9p)
-    {
-        return (settings.minCNO_F9P);
-    }
-    else if (present.gnss_um980)
-    {
-        return (settings.minCNO_um980);
-    }
-
-    // Select a default
-    return (settings.minCNO_F9P);
+    return (settings.minCNO);
 }
 
 double gnssGetLatitude()
@@ -735,6 +723,40 @@ bool gnssIsRTKFloat()
         {
             if (um980GetPositionType() == 49 ||
                 um980GetPositionType() == 34) // 49 = Wide-lane fixed solution, 34 = Narrow-land float solution
+                return (true);
+        }
+    }
+    return (false);
+}
+
+bool gnssIsPppConverging()
+{
+    if (online.gnss == true)
+    {
+        if (present.gnss_zedf9p)
+        {
+            return (false);
+        }
+        else if (present.gnss_um980)
+        {
+            if (um980GetPositionType() == 68) // 68 = PPP solution converging
+                return (true);
+        }
+    }
+    return (false);
+}
+
+bool gnssIsPppConverged()
+{
+    if (online.gnss == true)
+    {
+        if (present.gnss_zedf9p)
+        {
+            return (false);
+        }
+        else if (present.gnss_um980)
+        {
+            if (um980GetPositionType() == 69) // 69 = Precision Point Positioning
                 return (true);
         }
     }
@@ -1176,7 +1198,7 @@ void gnssMenuMessageBaseRtcm()
 {
     if (present.gnss_zedf9p)
     {
-        menuMessagesSubtype(settings.ubxMessageRatesBase, "RTCM-Base");
+        zedMenuMessagesSubtype(settings.ubxMessageRatesBase, "RTCM-Base");
     }
     else if (present.gnss_um980)
     {
@@ -1238,15 +1260,8 @@ char *gnssGetRtcmLowDataRateString()
 
 float gnssGetSurveyInStartingAccuracy()
 {
-    if (present.gnss_zedf9p)
-    {
-        return (zedGetSurveyInStartingAccuracy());
-    }
-    else if (present.gnss_um980)
-    {
-        return (um980GetSurveyInStartingAccuracy());
-    }
-    return (0);
+
+    return (settings.surveyInStartingAccuracy);
 }
 
 void gnssMenuConstellations()

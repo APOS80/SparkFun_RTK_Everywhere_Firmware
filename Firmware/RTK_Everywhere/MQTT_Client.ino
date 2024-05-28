@@ -305,7 +305,7 @@ void mqttClientReceiveMessage(int messageSize)
 
         if (mqttCount > 0)
         {
-            // Correction data from PP can go direct to ZED module
+            // Correction data from PP can go direct to GNSS
             if (present.gnss_zedf9p)
             {
                 // Only push SPARTN if the priority says we can
@@ -315,8 +315,9 @@ void mqttClientReceiveMessage(int messageSize)
                     updateCorrectionsLastSeen(CORR_IP);
                     if (isHighestRegisteredCorrectionsSource(CORR_IP))
                     {
-                        if (((settings.debugMqttClientData == true) || (settings.debugCorrections == true)) && !inMainMenu)
-                            systemPrintf("Pushing %d bytes from %s topic to ZED\r\n", mqttCount, topic);
+                        if (((settings.debugMqttClientData == true) || (settings.debugCorrections == true)) &&
+                            !inMainMenu)
+                            systemPrintf("Pushing %d bytes from %s topic to GNSS\r\n", mqttCount, topic);
 
                         updateZEDCorrectionsSource(0); // Set SOURCE to 0 (IP) if needed
 
@@ -325,8 +326,10 @@ void mqttClientReceiveMessage(int messageSize)
                     }
                     else
                     {
-                        if (((settings.debugMqttClientData == true) || (settings.debugCorrections == true)) && !inMainMenu)
-                            systemPrintf("NOT pushing %d bytes from %s topic to ZED due to priority\r\n", mqttCount, topic);
+                        if (((settings.debugMqttClientData == true) || (settings.debugCorrections == true)) &&
+                            !inMainMenu)
+                            systemPrintf("NOT pushing %d bytes from %s topic to GNSS due to priority\r\n", mqttCount,
+                                         topic);
                     }
                 }
                 // Always push KEYS and MGA to the ZED
@@ -347,7 +350,7 @@ void mqttClientReceiveMessage(int messageSize)
                 if (((settings.debugMqttClientData == true) || (settings.debugCorrections == true)) && !inMainMenu)
                     systemPrintf("Pushing %d bytes from %s topic to PPL for UM980\r\n", mqttCount, topic);
 
-                if (online.ppl == false)
+                if (online.ppl == false && settings.debugMqttClientData == true)
                     systemPrintln("Warning: PPL is offline");
 
                 sendSpartnToPpl(mqttData, mqttCount);
@@ -423,6 +426,10 @@ void mqttClientStop(bool shutdown)
     // Free the mqttClient resources
     if (mqttClient)
     {
+        // Disconnect from broker
+        if (mqttClient->connected() == true)
+            mqttClient->stop(); // Disconnects and stops client
+
         if (settings.debugMqttClientState)
             systemPrintln("Freeing mqttClient");
 

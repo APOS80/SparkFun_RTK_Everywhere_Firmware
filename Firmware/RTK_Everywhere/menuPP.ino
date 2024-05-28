@@ -221,6 +221,8 @@ bool pointperfectProvisionDevice()
 
     do
     {
+        provisionAttempt++;
+
         char hardwareID[15];
         snprintf(hardwareID, sizeof(hardwareID), "%02X%02X%02X%02X%02X%02X%02X", btMACAddress[0], btMACAddress[1],
                  btMACAddress[2], btMACAddress[3], btMACAddress[4], btMACAddress[5],
@@ -230,6 +232,8 @@ bool pointperfectProvisionDevice()
         // Override ID with testing ID
         snprintf(hardwareID, sizeof(hardwareID), "%02X%02X%02X%02X%02X%02X%02X", whitelistID[0], whitelistID[1],
                  whitelistID[2], whitelistID[3], whitelistID[4], whitelistID[5], productVariant);
+
+        systemPrintf("Using whitelist hardware ID: %s\r\n", hardwareID);
 #endif // WHITELISTED_ID
 
         // Given name must be between 1 and 50 characters
@@ -329,12 +333,20 @@ bool pointperfectProvisionDevice()
             snprintf(hardwareID, sizeof(hardwareID), "%02X%02X%02X%02X%02X%02X%02X", btMACAddress[0], btMACAddress[1],
                      btMACAddress[2], btMACAddress[3], btMACAddress[4], btMACAddress[5], productVariant);
 
+            char landingPageUrl[200] = "";
+            if (productVariant == RTK_TORCH)
+                snprintf(landingPageUrl, sizeof(landingPageUrl),
+                         "or goto https://www.sparkfun.com/rtk_torch_registration ");
+            else
+                systemPrintln("pointperfectProvisionDevice() Platform missing landing page");
+
             systemPrintf("This device has been deactivated. Please contact "
-                         "support@sparkfun.com or goto https://www.sparkfun.com/pointperfect to renew the PointPerfect "
+                         "support@sparkfun.com %sto renew the PointPerfect "
                          "subscription. Please reference device ID: %s\r\n",
-                         hardwareID);
+                         landingPageUrl, hardwareID);
 
             displayAccountExpired(5000);
+            break;
         }
         else if (ztpResponse == ZTP_NOT_WHITELISTED)
         {
@@ -342,12 +354,20 @@ bool pointperfectProvisionDevice()
             snprintf(hardwareID, sizeof(hardwareID), "%02X%02X%02X%02X%02X%02X%02X", btMACAddress[0], btMACAddress[1],
                      btMACAddress[2], btMACAddress[3], btMACAddress[4], btMACAddress[5], productVariant);
 
+            char landingPageUrl[200] = "";
+            if (productVariant == RTK_TORCH)
+                snprintf(landingPageUrl, sizeof(landingPageUrl),
+                         "or goto https://www.sparkfun.com/rtk_torch_registration ");
+            else
+                systemPrintln("pointperfectProvisionDevice() Platform missing landing page");
+
             systemPrintf("This device is not whitelisted. Please contact "
-                         "support@sparkfun.com or goto https://www.sparkfun.com/pointperfect to get your subscription "
+                         "support@sparkfun.com %sto get the subscription "
                          "activated. Please reference device ID: %s\r\n",
-                         hardwareID);
+                         landingPageUrl, hardwareID);
 
             displayNotListed(5000);
+            break;
         }
         else if (ztpResponse == ZTP_ALREADY_REGISTERED)
         {
@@ -359,11 +379,11 @@ bool pointperfectProvisionDevice()
             systemPrintf("This device is registered on a different profile. Please contact "
                          "support@sparkfun.com for more assistance. Please reference device ID: %s\r\n",
                          hardwareID);
+            break;
         }
         else if (ztpResponse == ZTP_RESPONSE_TIMEOUT)
         {
             // The WiFi failed to connect in a timely manner to the API.
-            provisionAttempt++;
             if (provisionAttempt < maxProvisionAttempts)
                 systemPrintf("Provision server response timed out. Trying again.\r\n");
             else
@@ -372,7 +392,6 @@ bool pointperfectProvisionDevice()
         else
         {
             // Unknown error
-            provisionAttempt++;
             if (provisionAttempt < maxProvisionAttempts)
                 systemPrintf("Unknown provisioning error. Trying again.\r\n");
             else
@@ -1394,7 +1413,7 @@ void menuPointPerfect()
         systemPrintln("Menu: PointPerfect Corrections");
 
         if (settings.debugCorrections == true)
-            systemPrintf("Time to first RTK Fix: %ds Restarts: %d\r\n", rtkTimeToFixMs / 1000, lbandRestarts);
+            systemPrintf("Time to first RTK Fix: %ds Restarts: %d\r\n", rtkTimeToFixMs / 1000, floatLockRestarts);
 
         if (settings.debugCorrections == true)
             systemPrintf("settings.pointPerfectKeyDistributionTopic: %s\r\n",
@@ -1429,13 +1448,12 @@ void menuPointPerfect()
         //     We also receive the full list of regional correction topics: /pp/ip/us , /pp/ip/eu , etc.
         //     We need to subscribe to our regional correction topic and push the data to the PPL
         //     RTCM from the PPL is pushed to the UM980
-        //   For L-Band-only - e.g. EVK or Facet mosaic or Facet v2 L-Band
+        //   For L-Band-only - e.g. Facet mosaic or Facet v2 L-Band
         //     During ZTP Provisioning, we receive the UBX-format key distribution topic /pp/ubx/0236/Lb
         //     There are no regional correction topics for L-Band-only
-        //     EVK pushes the keys to the ZED and pushes PMP from the NEO to the ZED
+        //     Facet v2 L-Band pushes the keys to the ZED and pushes PMP from the NEO to the ZED
         //     Facet mosaic pushes the current key and raw L-Band to the PPL, then pushes RTCM to the X5
-        //     Facet v2 L-Band does the same as EVK
-        //   For a future L-Band+IP product:
+        //   For L-Band+IP - e.g. EVK:
         //     During ZTP Provisioning, we receive the UBX-format key distribution topic /pp/ubx/0236/Lb
         //     We also receive the full list of regional correction topics: /pp/Lb/us , /pp/Lb/eu , etc.
         //     We can subscribe to the topic and push IP data to the ZED - using UBLOX_CFG_SPARTN_USE_SOURCE 0
@@ -1589,11 +1607,14 @@ bool pointPerfectIsEnabled()
 // Process any new L-Band from I2C
 void updateLBand()
 {
+    static unsigned long lbandLastReport;
+    static unsigned long lbandTimeFloatStarted; // Monitors the ZED during L-Band reception if a fix takes too long
+
     // Skip if in configure-via-ethernet mode
     if (configureViaEthernet)
     {
-        //if (settings.debugCorrections == true)
-        //    systemPrintln("configureViaEthernet: skipping updateLBand");
+        // if (settings.debugCorrections == true)
+        //     systemPrintln("configureViaEthernet: skipping updateLBand");
         return;
     }
 
@@ -1608,14 +1629,18 @@ void updateLBand()
             lbandCorrectionsReceived = false;
 
         // If we don't get an L-Band fix within Timeout, hot-start ZED-F9x
-        if (systemState == STATE_ROVER_RTK_FLOAT)
+        if (gnssIsRTKFloat())
         {
+            if (lbandTimeFloatStarted == 0)
+                lbandTimeFloatStarted = millis();
+
             if (millis() - lbandLastReport > 1000)
             {
                 lbandLastReport = millis();
 
                 if (settings.debugCorrections == true)
-                    systemPrintf("ZED restarts: %d Time remaining before L-Band forced restart: %ds\r\n", lbandRestarts,
+                    systemPrintf("ZED restarts: %d Time remaining before Float lock forced restart: %ds\r\n",
+                                 floatLockRestarts,
                                  settings.lbandFixTimeout_seconds - ((millis() - lbandTimeFloatStarted) / 1000));
             }
 
@@ -1623,7 +1648,7 @@ void updateLBand()
             {
                 if ((millis() - lbandTimeFloatStarted) > (settings.lbandFixTimeout_seconds * 1000L))
                 {
-                    lbandRestarts++;
+                    floatLockRestarts++;
 
                     lbandTimeFloatStarted =
                         millis(); // Restart timer for L-Band. Don't immediately reset ZED to achieve fix.
@@ -1632,15 +1657,22 @@ void updateLBand()
                     theGNSS->softwareResetGNSSOnly();
 
                     if (settings.debugCorrections == true)
-                        systemPrintf("Restarting ZED. Number of L-Band restarts: %d\r\n", lbandRestarts);
+                        systemPrintf("Restarting ZED. Number of Float lock restarts: %d\r\n", floatLockRestarts);
                 }
             }
         }
         else if (gnssIsRTKFix() && rtkTimeToFixMs == 0)
         {
+            lbandTimeFloatStarted = 0; // Restart timer in case we drop from RTK Fix
+
             rtkTimeToFixMs = millis();
             if (settings.debugCorrections == true)
                 systemPrintf("Time to first RTK Fix: %ds\r\n", rtkTimeToFixMs / 1000);
+        }
+        else
+        {
+            // We are not in float or fix, so restart timer
+            lbandTimeFloatStarted = 0;
         }
     }
 

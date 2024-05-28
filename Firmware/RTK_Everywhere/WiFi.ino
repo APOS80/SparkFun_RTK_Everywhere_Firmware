@@ -171,7 +171,7 @@ void menuWiFi()
 // Display the WiFi IP address
 void wifiDisplayIpAddress()
 {
-    systemPrintf("WiFi %s IP address: ", WiFi.SSID());
+    systemPrintf("WiFi '%s' IP address: ", WiFi.SSID());
     systemPrint(WiFi.localIP());
     systemPrintf(" RSSI: %d\r\n", WiFi.RSSI());
 
@@ -253,12 +253,14 @@ bool wifiStartAP(bool forceAP)
         IPAddress subnet(255, 255, 255, 0);
 
         WiFi.softAPConfig(local_IP, gateway, subnet);
-        if (WiFi.softAP("RTK Config") == false) // Must be short enough to fit OLED Width
+
+        const char *softApSsid = "RTK Config";
+        if (WiFi.softAP(softApSsid) == false) // Must be short enough to fit OLED Width
         {
             systemPrintln("WiFi AP failed to start");
             return (false);
         }
-        systemPrint("WiFi AP Started with IP: ");
+        systemPrintf("WiFi AP '%s' started with IP: ", softApSsid);
         systemPrintln(WiFi.softAPIP());
 
         // Start DNS Server
@@ -386,8 +388,8 @@ void wifiUpdate()
         break;
     }
 
-    // Process DNS when we are in AP mode for captive portal
-    if (WiFi.getMode() == WIFI_AP && settings.enableCaptivePortal)
+    // Process DNS when we are in AP mode or AP+STA mode for captive portal
+    if (((WiFi.getMode() == WIFI_AP) || (WiFi.getMode() == WIFI_AP_STA)) && settings.enableCaptivePortal)
     {
         dnsServer.processNextRequest();
     }
@@ -433,7 +435,7 @@ void wifiStop()
         MDNS.end();
 
     // Stop the DNS server if we were using the captive portal
-    if (WiFi.getMode() == WIFI_AP && settings.enableCaptivePortal)
+    if (((WiFi.getMode() == WIFI_AP) || (WiFi.getMode() == WIFI_AP_STA)) && settings.enableCaptivePortal)
         dnsServer.stop();
 
     // Stop the other network clients and then WiFi
@@ -484,16 +486,40 @@ bool wifiIsConnected()
 // Attempts a connection to all provided SSIDs
 // Returns true if successful
 // Gives up if no SSID detected or connection times out
+// If useAPSTAMode is true, do an extra check and go from WIFI_AP mode to WIFI_AP_STA mode
 bool wifiConnect(unsigned long timeout)
+{
+    return wifiConnect(timeout, false, nullptr);
+}
+bool wifiConnect(unsigned long timeout, bool useAPSTAMode, bool *wasInAPmode)
 {
     if (wifiIsConnected())
         return (true); // Nothing to do
 
     displayWiFiConnect();
 
-    // Before we can issue esp_wifi_() commands WiFi must be started
-    if (WiFi.getMode() != WIFI_STA)
-        WiFi.mode(WIFI_STA);
+    // If otaUpdate or otaCheckVersion wants to use WIFI_AP_STA mode
+    if (useAPSTAMode && (wasInAPmode != nullptr))
+    {
+        *wasInAPmode = (WiFi.getMode() == WIFI_AP);
+
+        if (*wasInAPmode)
+        {
+            systemPrintln("wifiConnect: changing from WIFI_AP to WIFI_AP_STA");
+            WiFi.mode(WIFI_AP_STA); // Change mode from WIFI_AP to WIFI_AP_STA
+        }
+        else
+        {
+            systemPrintln("wifiConnect: was not in WIFI_AP mode. Going to WIFI_STA");
+            WiFi.mode(WIFI_STA); // Must have been off - or already in STA mode?
+        }
+    }
+    else
+    {
+        // Before we can issue esp_wifi_() commands WiFi must be started
+        if (WiFi.getMode() != WIFI_STA)
+            WiFi.mode(WIFI_STA);
+    }
 
     // Verify that the necessary protocols are set
     uint8_t protocols = 0;
@@ -527,38 +553,17 @@ bool wifiConnect(unsigned long timeout)
 
     int wifiResponse = WL_DISCONNECTED;
 
-    // WiFi.begin() is much faster than wifiMulti (requires scan time)
-    // Use wifiMulti only if multiple credentials exist
-    if (wifiNetworkCount() == 1)
+    systemPrint("Connecting WiFi... ");
+    WiFiMulti wifiMulti;
+
+    // Load SSIDs
+    for (int x = 0; x < MAX_WIFI_NETWORKS; x++)
     {
-        systemPrint("Connecting WiFi");
-
-        // Load SSID - may not be in spot 0
-        for (int x = 0; x < MAX_WIFI_NETWORKS; x++)
-        {
-            if (strlen(settings.wifiNetworks[x].ssid) > 0)
-            {
-                WiFi.begin(settings.wifiNetworks[x].ssid, settings.wifiNetworks[x].password);
-                break;
-            }
-        }
-
-        wifiResponse = WiFi.waitForConnectResult();
+        if (strlen(settings.wifiNetworks[x].ssid) > 0)
+            wifiMulti.addAP(settings.wifiNetworks[x].ssid, settings.wifiNetworks[x].password);
     }
-    else
-    {
-        systemPrint("Connecting WiFi... ");
-        WiFiMulti wifiMulti;
 
-        // Load SSIDs
-        for (int x = 0; x < MAX_WIFI_NETWORKS; x++)
-        {
-            if (strlen(settings.wifiNetworks[x].ssid) > 0)
-                wifiMulti.addAP(settings.wifiNetworks[x].ssid, settings.wifiNetworks[x].password);
-        }
-
-        wifiResponse = wifiMulti.run(timeout);
-    }
+    wifiResponse = wifiMulti.run(timeout);
 
     if (wifiResponse == WL_CONNECTED)
     {
@@ -706,6 +711,11 @@ IPAddress wifiGetIpAddress()
 int wifiGetRssi()
 {
     return WiFi.RSSI();
+}
+
+String wifiGetSsid()
+{
+    return WiFi.SSID();
 }
 
 #endif // COMPILE_WIFI

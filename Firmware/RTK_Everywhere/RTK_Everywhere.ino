@@ -445,6 +445,29 @@ float batteryChargingPercentPerHour;
 #include "bluetoothSelect.h"
 #endif // COMPILE_BT
 
+// This value controls the data that is output from the USB serial port
+// to the host PC.  By default (false) status and debug messages are output
+// to the USB serial port.  When this value is set to true then the status
+// and debug messages are discarded and only GNSS data is output to USB
+// serial.
+//
+// Switching from status and debug messages to GNSS output is done in two
+// places, at the end of setup and at the end of maenuMain.  In both of
+// these places the new value comes from settings.enableGnssToUsbSerial.
+// Upon boot status and debug messages are output at least until the end
+// of setup.  Upon entry into menuMain, this value is set false to again
+// output menu output, status and debug messages to be output.  At the end
+// of setup the value is updated and if enabled GNSS data is sent to the
+// USB serial port and PC.
+volatile bool forwardGnssDataToUsbSerial;
+
+// Timeout between + characters to enter the +++ sequence while
+// forwardGnssDataToUsbSerial is true.  When sequence is properly entered
+// forwardGnssDataToUsbSerial is set to false and menuMain is displayed.
+// If the timeout between characters occurs or an invalid character is
+// entered then no changes are made and the +++ sequence must be re-entered.
+#define PLUS_PLUS_PLUS_TIMEOUT (2 * 1000) // Milliseconds
+
 #define platformPrefix platformPrefixTable[productVariant] // Sets the prefix for broadcast names
 
 #include <driver/uart.h>    //Required for uart_set_rx_full_threshold() on cores <v2.0.5
@@ -636,6 +659,7 @@ uint8_t *pplRtcmBuffer;
 bool pplAttemptedStart = false;
 bool pplGnssOutput = false;
 bool pplMqttCorrections = false;
+bool pplLBandCorrections = false;     // Raw L-Band - e.g. from mosaic X5
 unsigned long pplKeyExpirationMs = 0; // Milliseconds until the current PPL key expires
 
 //=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -692,10 +716,10 @@ uint32_t triggerTowMsR;    // Global copy - Time Of Week of rising edge (ms)
 uint32_t triggerTowSubMsR; // Global copy - Millisecond fraction of Time Of Week of rising edge in nanoseconds
 uint32_t triggerAccEst;    // Global copy - Accuracy estimate in nanoseconds
 
-bool firstPowerOn = true;  // After boot, apply new settings to ZED if the user switches between base or rover
+bool firstPowerOn = true;  // After boot, apply new settings to GNSS if the user switches between base or rover
 unsigned long splashStart; // Controls how long the splash is displayed for. Currently min of 2s.
 bool restartBase;          // If the user modifies any NTRIP Server settings, we need to restart the base
-bool restartRover;         // If the user modifies any NTRIP Client or PointPerfect settings, we need to restart the rover
+bool restartRover; // If the user modifies any NTRIP Client or PointPerfect settings, we need to restart the rover
 
 unsigned long startTime;             // Used for checking longest-running functions
 bool lbandCorrectionsReceived;       // Used to display L-Band SIV icon when corrections are successfully decrypted
@@ -723,16 +747,19 @@ uint16_t failedParserMessages_UBX;
 uint16_t failedParserMessages_RTCM;
 uint16_t failedParserMessages_NMEA;
 
+// Corrections Priorities Support
+std::vector<registeredCorrectionsSource>
+    registeredCorrectionsSources; // vector (linked list) of registered corrections sources for this device
+correctionsSource pplCorrectionsSource = CORR_NUM; // Record which source is feeding the PPL
+
 // configureViaEthernet:
 //  Set to true if configureViaEthernet.txt exists in LittleFS.
 //  Causes setup and loop to skip any code which would cause SPI or interrupts to be initialized.
 //  This is to allow SparkFun_WebServer_ESP32_W5500 to have _exclusive_ access to WiFi, SPI and Interrupts.
 bool configureViaEthernet;
 
-unsigned long lbandTimeFloatStarted; // Monitors the ZED during L-Band reception if a fix takes too long
-int lbandRestarts;
+int floatLockRestarts;
 unsigned long rtkTimeToFixMs;
-unsigned long lbandLastReport;
 
 volatile PeriodicDisplay_t periodicDisplay;
 
@@ -749,11 +776,15 @@ unsigned long beepCount;         // Number of beeps to do
 
 unsigned long lastMqttToPpl = 0;
 unsigned long lastGnssToPpl = 0;
+
+// Command processing
+int commandCount;
+int16_t *commandIndex;
 //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 // Display boot times
 //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-#define MAX_BOOT_TIME_ENTRIES 39
+#define MAX_BOOT_TIME_ENTRIES 40
 uint8_t bootTimeIndex;
 uint32_t bootTime[MAX_BOOT_TIME_ENTRIES];
 const char *bootTimeString[MAX_BOOT_TIME_ENTRIES];
@@ -806,7 +837,6 @@ volatile bool deadManWalking;
         settings.enablePrintIdleTime = true;                                                                           \
         settings.enablePrintBatteryMessages = true;                                                                    \
         settings.enablePrintRoverAccuracy = true;                                                                      \
-        settings.enablePrintBadMessages = true;                                                                        \
         settings.enablePrintLogFileMessages = true;                                                                    \
         settings.enablePrintLogFileStatus = true;                                                                      \
         settings.enablePrintRingBufferOffsets = true;                                                                  \
@@ -826,7 +856,7 @@ volatile bool deadManWalking;
         settings.debugNtripServerState = true;                                                                         \
         settings.debugTcpClient = true;                                                                                \
         settings.debugTcpServer = true;                                                                                \
-        settings.debugUdpServer = true;                                                                             \
+        settings.debugUdpServer = true;                                                                                \
         settings.printBootTimes = true;                                                                                \
     }
 
@@ -953,11 +983,15 @@ void setup()
     DMW_b("identifyBoard");
     identifyBoard(); // Determine what hardware platform we are running on.
 
+    DMW_b("commandIndexFill");
+    if (!commandIndexFill()) // Initialize the command table index
+        reportFatalError("Failed to allocate and fill the commandIndex!");
+
     DMW_b("beginBoard");
     beginBoard(); // Set all pin numbers and pin initial states
 
     DMW_b("beginFS");
-    beginFS(); // Load NVM settings
+    beginFS(); // Start the LittleFS file system in the spiffs partition
 
     DMW_b("checkConfigureViaEthernet");
     configureViaEthernet =
@@ -1108,24 +1142,16 @@ void setup()
         systemPrintf("%8d mSec: Total boot time\r\n", bootTime[bootTimeIndex]);
         systemPrintln();
     }
+
+    // If necessary, switch to sending GNSS data out the USB serial port
+    // to the PC
+    forwardGnssDataToUsbSerial = settings.enableGnssToUsbSerial;
 }
 
 void loop()
 {
-    static uint32_t lastPeriodicDisplay;
-
-    // Determine which items are periodically displayed
-    if ((millis() - lastPeriodicDisplay) >= settings.periodicDisplayInterval)
-    {
-        lastPeriodicDisplay = millis();
-        periodicDisplay = settings.periodicDisplay;
-
-        // Reboot the system after a specified timeout
-        if (((lastPeriodicDisplay / 1000) > settings.rebootSeconds) && (!inMainMenu))
-            ESP.restart();
-    }
-    if (deadManWalking)
-        periodicDisplay = (PeriodicDisplay_t)-1;
+    DMW_c("periodicDisplay");
+    updatePeriodicDisplay();
 
     DMW_c("gnssUpdate");
     gnssUpdate();
@@ -1461,6 +1487,28 @@ void updateRadio()
         }
     }
 #endif // COMPILE_ESPNOW
+}
+
+void updatePeriodicDisplay()
+{
+    static uint32_t lastPeriodicDisplay;
+
+    // Determine which items are periodically displayed
+    if ((millis() - lastPeriodicDisplay) >= settings.periodicDisplayInterval)
+    {
+        lastPeriodicDisplay = millis();
+        periodicDisplay = settings.periodicDisplay;
+
+        // Reboot the system after a specified timeout
+        if ((lastPeriodicDisplay / (1000 * 60)) > settings.rebootMinutes)
+        {
+            systemPrintln("Automatic system reset");
+            delay(50); // Allow print to complete
+            ESP.restart();
+        }
+    }
+    if (deadManWalking)
+        periodicDisplay = (PeriodicDisplay_t)-1;
 }
 
 // Record who is holding the semaphore

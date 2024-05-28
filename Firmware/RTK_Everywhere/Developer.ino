@@ -152,6 +152,7 @@ bool wifiConnect(unsigned long timeout) {return false;}
 IPAddress wifiGetGatewayIpAddress() {return IPAddress((uint32_t)0);}
 IPAddress wifiGetIpAddress() {return IPAddress((uint32_t)0);}
 int wifiGetRssi() {return -999;}
+String wifiGetSsid() {return "**WiFi Not compiled**";}
 bool wifiIsConnected() {return false;}
 bool wifiIsNeeded() {return false;}
 int wifiNetworkCount() {return 0;}
@@ -176,6 +177,7 @@ void tiltUpdate() {}
 void tiltStop() {}
 void tiltSensorFactoryReset() {}
 bool tiltIsCorrecting() {return(false);}
+void tiltRequestStop() {}
 
 #endif  // COMPILE_IM19_IMU
 
@@ -216,7 +218,7 @@ bool     um980IsValidTime() {return false;}
 void     um980PrintInfo() {}
 int      um980PushRawData(uint8_t *dataToSend, int dataLength) {return 0;}
 bool     um980SaveConfiguration() {}
-void     um980SetBaudRateCOM3(uint32_t baudRate) {}
+bool     um980SetBaudRateCOM3(uint32_t baudRate) {}
 bool     um980SetConstellations() {return false;}
 void     um980SetMinCNO(uint8_t cnoValue) {}
 void     um980SetMinElevation(uint8_t elevationDegrees) {}
@@ -235,7 +237,6 @@ void     um980BaseRtcmDefault(){}
 void     um980BaseRtcmLowDataRate(){}
 char *   um980GetRtcmDefaultString() {return ("Not compiled");}
 char *   um980GetRtcmLowDataRateString() {return ("Not compiled");}
-float    um980GetSurveyInStartingAccuracy() {return(0.0);}
 void     um980MenuConstellations(){}
 double   um980GetRateS() {return(0.0);}
 void     um980MenuMessagesSubtype(float *localMessageRate, const char *messageType){}
